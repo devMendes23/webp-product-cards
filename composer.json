@@ -1,0 +1,24 @@
+{
+	"name": "mateus/webp-product-cards",
+	"description": "Converte imagens dos cards de produtos (WooCommerce/Elementor Pro) para WebP, com observabilidade: request-id, logs JSON, health check, métricas, cache hit/miss, query logging e alertas.",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=7.4"
+	},
+	"require-dev": {
+		"phpunit/phpunit": "^9.6"
+	},
+	"autoload": {
+		"psr-4": {
+			"WebPProductCards\\": "includes/"
+		}
+	},
+	"scripts": {
+		"test": "phpunit",
+		"test:ci": "phpunit --testdox"
+	},
+	"config": {
+		"optimize-autoloader": true
+	}
+}

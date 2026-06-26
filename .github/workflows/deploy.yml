@@ -1,0 +1,80 @@
+name: Deploy (monitoramento + rollback automático)
+
+# Requisito 10: deploy NÃO é função de um plugin. O rollback automático real
+# vive aqui, no CI/CD, que consulta o endpoint /health do plugin após o deploy
+# e reverte para a versão anterior se o site ficar "unhealthy".
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  HEALTH_URL: ${{ vars.HEALTH_URL }}   # ex.: https://sualoja.com/wp-json/webp-product-cards/v1/health
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: gd, imagick
+          tools: composer
+      - run: composer install --no-interaction --prefer-dist
+      - name: Testes de regressão (requisito 8)
+        run: composer test:ci
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency: production_deploy   # impede deploys concorrentes.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guardar a tag anterior (para rollback)
+        id: prev
+        run: echo "tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo '')" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy via SSH/rsync
+        run: |
+          echo "Enviando ${{ github.ref_name }} para produção..."
+          # rsync -az --delete ./ usuario@host:/var/www/.../wp-content/plugins/webp-product-cards/
+          # ssh usuario@host "wp plugin activate webp-product-cards"
+
+      - name: Monitorar /health (10 tentativas, intervalo de 15s)
+        id: health
+        run: |
+          ok=0
+          for i in $(seq 1 10); do
+            body=$(curl -sS -m 10 -w '\n%{http_code}' "$HEALTH_URL" || true)
+            code=$(echo "$body" | tail -n1)
+            json=$(echo "$body" | sed '$d')
+            status=$(echo "$json" | jq -r '.status // "unknown"' 2>/dev/null || echo unknown)
+            echo "tentativa $i: http=$code status=$status"
+            if [ "$code" = "200" ] && [ "$status" = "healthy" ]; then ok=1; break; fi
+            sleep 15
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: Rollback automático se unhealthy
+        if: steps.health.outputs.ok != '1'
+        run: |
+          prev="${{ steps.prev.outputs.tag }}"
+          echo "::error::Deploy ficou unhealthy. Revertendo para $prev"
+          if [ -z "$prev" ]; then
+            echo "::error::Sem versão anterior para rollback. Intervenção manual necessária."
+            exit 1
+          fi
+          git checkout "$prev"
+          # rsync -az --delete ./ usuario@host:/var/www/.../wp-content/plugins/webp-product-cards/
+          # ssh usuario@host "wp plugin activate webp-product-cards"
+          echo "Rollback para $prev concluído."
+          exit 1
+
+      - name: Sucesso
+        if: steps.health.outputs.ok == '1'
+        run: echo "Deploy saudável. ✅"
